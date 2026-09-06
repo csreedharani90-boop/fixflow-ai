@@ -1,36 +1,71 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# FixFlow 🔧
 
-## Getting Started
+## AI Technician Troubleshooting Assistant for Industrial Motors
 
-First, run the development server:
+**Smarter Diagnostics. Safer Operations. Higher Uptime.**
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+FixFlow is an AI-powered troubleshooting assistant designed to help technicians quickly diagnose industrial motor and controller faults.
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Instead of manually searching through large technical manuals, technicians can enter a symptom or fault code and receive relevant technical evidence, likely causes, recommended checks, and safety guidance.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+---
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## 🚨 Problem
 
-## Learn More
+Industrial technicians often spend significant time diagnosing motor faults because:
 
-To learn more about Next.js, take a look at the following resources:
+- Technical information is spread across manuals and documents.
+- Fault codes are difficult to interpret quickly.
+- Troubleshooting requires experience and domain knowledge.
+- Incorrect diagnosis can lead to equipment damage or unsafe operation.
+- Downtime directly affects productivity.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+---
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## 💡 Solution
 
-## Deploy on Vercel
+FixFlow combines:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+**Technician Query → Moss Knowledge Retrieval → AI Diagnosis → Evidence → Troubleshooting Guidance**
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+The system retrieves relevant technical knowledge and presents it together with an AI-assisted diagnosis.
+
+---
+
+## 🏗️ Architecture
+
+```text
+┌─────────────────────┐
+│      Technician     │
+│  Symptom / Fault    │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│   FixFlow UI        │
+│ Next.js + React     │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│    API Layer        │
+│   Next.js Route     │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│  Moss Retrieval     │
+│ fixflow-knowledge-v2│
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│ AI Diagnosis Layer  │
+│ Causes + Checks     │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│ Technician Result   │
+│ Evidence + Safety   │
+└─────────────────────┘
