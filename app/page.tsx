@@ -1,11 +1,18 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
+import {
+  Room,
+  createLocalAudioTrack,
+  type LocalAudioTrack,
+} from "livekit-client";
 
 type Evidence = {
-  id: string;
-  score: number;
-  text: string;
+  id?: string;
+  score?: number;
+  text?: string;
+  content?: string;
+  source?: string;
 };
 
 type Diagnosis = {
@@ -18,24 +25,50 @@ type Diagnosis = {
 };
 
 export default function Home() {
-  const [query, setQuery] = useState("");
+  // ======================================================
+  // BASIC STATE
+  // ======================================================
+
+  const [fault, setFault] = useState("");
   const [loading, setLoading] = useState(false);
-  const [retrievalLoading, setRetrievalLoading] = useState(false);
 
   const [diagnosis, setDiagnosis] = useState<Diagnosis | null>(null);
   const [evidence, setEvidence] = useState<Evidence[]>([]);
+
   const [retrievalStatus, setRetrievalStatus] = useState("Ready");
   const [retrievalLatency, setRetrievalLatency] = useState("-");
-  const [error, setError] = useState("");
 
-  const getDiagnosis = (text: string): Diagnosis => {
-    const q = text.toLowerCase();
+  // ======================================================
+  // LIVEKIT VOICE STATE
+  // ======================================================
+
+  const [isListening, setIsListening] = useState(false);
+  const roomRef = useRef<Room | null>(null);
+  const audioTrackRef = useRef<LocalAudioTrack | null>(null);
+
+  // ======================================================
+  // GUIDED REPAIR MODE
+  // ======================================================
+
+  const [guidedRepair, setGuidedRepair] = useState(false);
+  const [guidedStep, setGuidedStep] = useState(0);
+
+  const [guidedAnswers, setGuidedAnswers] = useState<
+    { step: number; check: string; result: string }[]
+  >([]);
+
+  // ======================================================
+  // DIAGNOSIS LOGIC
+  // ======================================================
+
+  const generateDiagnosis = (text: string): Diagnosis => {
+    const query = text.toLowerCase();
 
     if (
-      q.includes("e17") ||
-      q.includes("hot") ||
-      q.includes("overheat") ||
-      q.includes("temperature")
+      query.includes("e17") ||
+      query.includes("hot") ||
+      query.includes("overheat") ||
+      query.includes("temperature")
     ) {
       return {
         title: "Motor Over-Temperature",
@@ -50,65 +83,70 @@ export default function Home() {
         ],
         checks: [
           "Check ventilation openings and remove blockage.",
-          "Inspect the cooling fan and confirm it is operating.",
+          "Inspect cooling fan and confirm it is operating.",
           "Measure motor current and compare it with the rated value.",
           "Check whether the connected mechanical load is excessive.",
           "Verify the surrounding ambient temperature.",
         ],
         safety:
-          "Isolate power before opening the motor/controller enclosure. Allow the motor to cool before inspection.",
+          "Isolate electrical power before opening the equipment. Allow the motor to cool before inspection and follow site electrical safety procedures.",
       };
     }
 
-    if (q.includes("e21") || q.includes("current")) {
+    if (
+      query.includes("e21") ||
+      query.includes("over-current") ||
+      query.includes("overcurrent") ||
+      query.includes("current")
+    ) {
       return {
         title: "Motor Over-Current",
         severity: "HIGH",
         confidence: 89,
         causes: [
-          "Mechanical overload",
-          "Motor winding issue",
-          "Supply voltage abnormality",
-          "Bearing friction",
-          "Incorrect controller configuration",
+          "Excessive mechanical load",
+          "Motor winding or electrical fault",
+          "Incorrect motor parameters",
+          "Mechanical obstruction",
+          "Supply or phase imbalance",
         ],
         checks: [
-          "Isolate power before inspection.",
           "Measure motor current on all phases.",
-          "Check the mechanical load.",
-          "Inspect bearings and shaft movement.",
-          "Verify controller current settings.",
+          "Compare measured current with the motor rated current.",
+          "Check for excessive mechanical load or mechanical obstruction.",
+          "Verify motor configuration and rated parameters.",
+          "Inspect the electrical supply and phase balance.",
         ],
         safety:
-          "Do not continue operating the motor if current is significantly above its rated value.",
+          "Disconnect and isolate electrical power before inspection. Do not touch energized conductors and follow the site's electrical lockout/tagout procedure.",
       };
     }
 
     if (
-      q.includes("e09") ||
-      q.includes("vibration") ||
-      q.includes("noise")
+      query.includes("e09") ||
+      query.includes("vibration") ||
+      query.includes("noise")
     ) {
       return {
         title: "Abnormal Motor Vibration",
         severity: "MEDIUM",
         confidence: 86,
         causes: [
-          "Bearing wear",
+          "Mechanical imbalance",
           "Misalignment",
+          "Bearing wear",
           "Loose mounting",
-          "Rotor imbalance",
-          "Mechanical coupling problem",
+          "Coupling or mechanical damage",
         ],
         checks: [
-          "Isolate power before inspection.",
-          "Check motor mounting bolts.",
-          "Inspect shaft and coupling alignment.",
-          "Inspect bearings for wear or abnormal noise.",
-          "Check for rotor imbalance.",
+          "Inspect the motor mounting and check for loose bolts.",
+          "Check shaft and coupling alignment.",
+          "Inspect bearings for abnormal noise or wear.",
+          "Check for mechanical imbalance.",
+          "Inspect the coupling and connected mechanical system.",
         ],
         safety:
-          "Stop the motor if vibration becomes severe or creates an unsafe operating condition.",
+          "Stop the equipment and isolate power before performing mechanical inspection. Do not approach moving components during operation.",
       };
     }
 
@@ -118,36 +156,40 @@ export default function Home() {
       confidence: 78,
       causes: [
         "Electrical fault",
-        "Mechanical overload",
+        "Mechanical fault",
         "Cooling problem",
-        "Sensor or controller issue",
+        "Incorrect operating conditions",
       ],
       checks: [
-        "Record the exact fault code and operating conditions.",
-        "Inspect the motor and controller for visible abnormalities.",
-        "Check power supply and electrical connections.",
-        "Check motor temperature and ventilation.",
-        "Review the retrieved technical evidence before taking corrective action.",
+        "Record the exact fault code or observed symptom.",
+        "Inspect the equipment for visible damage or abnormal conditions.",
+        "Check electrical supply and motor operating parameters.",
+        "Inspect the mechanical load and surrounding conditions.",
+        "Refer to the relevant technical documentation before corrective action.",
       ],
       safety:
-        "Isolate power before performing physical inspection or electrical measurements.",
+        "Follow site safety procedures and isolate hazardous energy before performing physical inspection or maintenance.",
     };
   };
 
-  const searchKnowledge = async () => {
+  // ======================================================
+  // MOSS KNOWLEDGE RETRIEVAL
+  // ======================================================
+
+  const searchKnowledge = async (voiceText?: string) => {
+    const query = voiceText ?? fault;
+
     if (!query.trim()) {
-      setError("Please enter a fault or symptom.");
+      alert("Please enter a fault code or symptom.");
       return;
     }
 
-    setError("");
+    setFault(query);
     setLoading(true);
-    setRetrievalLoading(true);
-    setRetrievalStatus("Searching knowledge...");
+    setRetrievalStatus("Searching...");
     setRetrievalLatency("-");
-    setEvidence([]);
 
-    const start = performance.now();
+    const startTime = performance.now();
 
     try {
       const response = await fetch("/api/moss-search", {
@@ -156,476 +198,807 @@ export default function Home() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          query: query.trim(),
+          query,
         }),
       });
 
-      const rawText = await response.text();
+      const data = await response.json();
 
-      let data: any = {};
+      const latency = Math.round(performance.now() - startTime);
 
-      try {
-        data = rawText ? JSON.parse(rawText) : {};
-      } catch {
-        data = {};
-      }
-
-      if (!response.ok) {
-        throw new Error(
-          data?.error || "Knowledge retrieval failed."
-        );
-      }
-
-      const elapsed = Math.round(
-        performance.now() - start
-      );
-
-      // ======================================================
-      // IMPORTANT FIX:
-      // API returns "evidence", NOT "results"
-      // ======================================================
-
-      const retrieved: Evidence[] = Array.isArray(
-        data?.evidence
-      )
-        ? data.evidence.map(
-            (item: any, index: number) => ({
-              id:
-                item?.id ||
-                `Evidence-${index + 1}`,
-
-              score:
-                typeof item?.score === "number"
-                  ? item.score
-                  : Math.max(
-                      1,
-                      10 - index * 2
-                    ),
-
-              text:
-                item?.text ||
-                item?.content ||
-                "Relevant technical knowledge retrieved for this query.",
-            })
-          )
-        : [];
-
-      setEvidence(
-        retrieved.slice(0, 5)
-      );
-
-      // Show the actual retrieval state
-      if (data?.mossQuerySuccessful) {
-        setRetrievalStatus("Live • Moss");
-      } else if (data?.mossConnected) {
-        setRetrievalStatus(
-          "Live • Moss Index"
-        );
-      } else {
-        setRetrievalStatus(
-          "Local Knowledge"
-        );
-      }
-
-      setRetrievalLatency(
-        `${
-          data?.retrievalLatency ??
-          elapsed
-        } ms`
-      );
-    } catch (err: any) {
-      console.error(
-        "Retrieval error:",
-        err
-      );
-
-      const elapsed = Math.round(
-        performance.now() - start
-      );
-
+      setRetrievalLatency(`${latency} ms`);
       setRetrievalStatus(
-        "Local Knowledge"
+        data?.source?.includes("Moss")
+          ? "Retrieved • Moss"
+          : "Retrieved • Local"
       );
 
+      if (Array.isArray(data?.results)) {
+        setEvidence(data.results);
+      } else if (Array.isArray(data?.evidence)) {
+        setEvidence(data.evidence);
+      } else {
+        setEvidence([]);
+      }
+
+      // Generate diagnosis using the existing FixFlow workflow
+      const result = generateDiagnosis(query);
+      setDiagnosis(result);
+
+      // Reset Guided Repair when a new diagnosis is generated
+      setGuidedRepair(false);
+      setGuidedStep(0);
+      setGuidedAnswers([]);
+    } catch (error) {
+      console.error("Moss retrieval error:", error);
+
+      setRetrievalStatus("Fallback");
       setRetrievalLatency(
-        `${elapsed} ms`
+        `${Math.round(performance.now() - startTime)} ms`
       );
-
-      // ======================================================
-      // FRONTEND FALLBACK
-      // ======================================================
 
       setEvidence([
         {
-          id: "fx-029",
-          score: 9,
-          text:
-            "E17 motor over-temperature fault. If the motor becomes hot after several minutes, check motor current, mechanical load, cooling airflow, ventilation, and bearing condition.",
-        },
-        {
-          id: "fx-003",
-          score: 7,
-          text:
-            "E17 indicates motor over-temperature. Common causes include excessive mechanical load, blocked ventilation, cooling fan failure, high ambient temperature, and excessive motor current.",
-        },
-        {
-          id: "fx-004",
-          score: 4,
-          text:
-            "Motor becomes hot after approximately 10 minutes of operation. Check for overload, blocked airflow, ventilation blockage, abnormal current, and cooling system problems.",
-        },
-        {
-          id: "fx-011",
-          score: 4,
-          text:
-            "Motor overheating can be caused by excessive load, high current, poor ventilation, high ambient temperature, damaged bearings, or inadequate cooling.",
-        },
-        {
-          id: "fx-013",
-          score: 1,
-          text:
-            "For abnormal motor temperature, measure motor current and inspect the cooling fan, ventilation openings, and surrounding airflow before restarting the equipment.",
+          id: "fallback-1",
+          score: 0,
+          source: "FixFlow Knowledge Base",
+          content:
+            "Fallback technical knowledge used because the retrieval service was unavailable.",
         },
       ]);
-    } finally {
-      setRetrievalLoading(false);
-    }
 
-    setDiagnosis(
-      getDiagnosis(query)
+      const result = generateDiagnosis(query);
+      setDiagnosis(result);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ======================================================
+  // LIVEKIT VOICE DIAGNOSIS
+  // ======================================================
+
+  const startVoiceDiagnosis = async () => {
+    if (isListening) return;
+
+    let room: Room | null = null;
+    let audioTrack: LocalAudioTrack | null = null;
+
+    try {
+      setIsListening(true);
+
+      const tokenResponse = await fetch("/api/livekit/token");
+      const tokenData = await tokenResponse.json();
+
+      if (!tokenData.success) {
+        throw new Error(
+          tokenData.error || "Unable to create LiveKit token"
+        );
+      }
+
+      room = new Room();
+      roomRef.current = room;
+
+      await room.connect(tokenData.url, tokenData.token);
+
+      audioTrack = await createLocalAudioTrack();
+      audioTrackRef.current = audioTrack;
+
+      await room.localParticipant.publishTrack(audioTrack);
+
+      const SpeechRecognition =
+        (window as any).SpeechRecognition ||
+        (window as any).webkitSpeechRecognition;
+
+      if (!SpeechRecognition) {
+        throw new Error(
+          "Speech recognition is not supported in this browser. Please use Google Chrome."
+        );
+      }
+
+      const recognition = new SpeechRecognition();
+
+      recognition.lang = "en-IN";
+      recognition.continuous = false;
+      recognition.interimResults = false;
+
+      recognition.onresult = async (event: any) => {
+        const transcript =
+          event.results?.[0]?.[0]?.transcript || "";
+
+        if (transcript.trim()) {
+          setFault(transcript);
+          await searchKnowledge(transcript);
+        }
+      };
+
+      recognition.onerror = (event: any) => {
+        console.error(
+          "Speech recognition error:",
+          event
+        );
+      };
+
+      recognition.onend = async () => {
+        try {
+          audioTrack?.stop();
+          await room?.disconnect();
+        } catch (error) {
+          console.error(error);
+        }
+
+        audioTrackRef.current = null;
+        roomRef.current = null;
+        setIsListening(false);
+      };
+
+      recognition.start();
+    } catch (error: any) {
+      console.error("LiveKit voice error:", error);
+
+      alert(
+        error?.message ||
+          "Unable to start voice diagnosis. Please check microphone permission."
+      );
+
+      try {
+        audioTrack?.stop();
+        await room?.disconnect();
+      } catch {}
+
+      audioTrackRef.current = null;
+      roomRef.current = null;
+
+      setIsListening(false);
+    }
+  };
+
+  // ======================================================
+  // GUIDED REPAIR FUNCTIONS
+  // ======================================================
+
+  const startGuidedRepair = () => {
+    if (!diagnosis) return;
+
+    setGuidedRepair(true);
+    setGuidedStep(0);
+    setGuidedAnswers([]);
+  };
+
+  const recordGuidedAnswer = (result: string) => {
+    if (!diagnosis) return;
+
+    const currentCheck = diagnosis.checks[guidedStep];
+
+    setGuidedAnswers((previous) => {
+      const existing = previous.find(
+        (item) => item.step === guidedStep
+      );
+
+      if (existing) {
+        return previous.map((item) =>
+          item.step === guidedStep
+            ? {
+                step: guidedStep,
+                check: currentCheck,
+                result,
+              }
+            : item
+        );
+      }
+
+      return [
+        ...previous,
+        {
+          step: guidedStep,
+          check: currentCheck,
+          result,
+        },
+      ];
+    });
+  };
+
+  const nextGuidedStep = () => {
+    if (!diagnosis) return;
+
+    const currentAnswer = guidedAnswers.find(
+      (item) => item.step === guidedStep
     );
 
-    setLoading(false);
+    if (!currentAnswer) {
+      alert("Please record the observation before continuing.");
+      return;
+    }
+
+    if (guidedStep < diagnosis.checks.length - 1) {
+      setGuidedStep((previous) => previous + 1);
+    } else {
+      setGuidedRepair(false);
+    }
   };
 
-  const handleExample = (
-    example: string
-  ) => {
-    setQuery(example);
-    setError("");
+  const resetGuidedRepair = () => {
+    setGuidedRepair(false);
+    setGuidedStep(0);
+    setGuidedAnswers([]);
   };
+
+  // ======================================================
+  // QUICK EXAMPLES
+  // ======================================================
+
+  const runExample = (example: string) => {
+    setFault(example);
+    searchKnowledge(example);
+  };
+
+  // ======================================================
+  // UI
+  // ======================================================
 
   return (
     <main className="min-h-screen bg-slate-950 text-white">
-      <div className="mx-auto max-w-6xl px-6 py-10">
+      <div className="mx-auto max-w-7xl px-6 py-8">
 
         {/* HEADER */}
-        <header className="mb-10">
-          <div className="mb-3 flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-600 text-xl font-bold">
-              F
-            </div>
+        <header className="mb-8 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
 
-            <div>
-              <h1 className="text-3xl font-bold tracking-tight">
-                FixFlow
-              </h1>
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight">
+              🔧 FixFlow
+            </h1>
 
-              <p className="text-sm text-slate-400">
-                AI Technician Troubleshooting Assistant
-              </p>
-            </div>
+            <p className="mt-1 text-sm text-slate-400">
+              AI Technician Troubleshooting Assistant
+            </p>
           </div>
 
-          <p className="max-w-3xl text-slate-400">
-            Enter an industrial motor fault code or symptom
-            to retrieve technical evidence and generate
-            actionable troubleshooting guidance.
-          </p>
+          <div className="rounded-lg border border-slate-800 bg-slate-900 px-4 py-2 text-xs text-slate-400">
+            Moss-powered semantic troubleshooting
+          </div>
+
         </header>
 
-        {/* SEARCH CARD */}
-        <section className="mb-8 rounded-2xl border border-slate-800 bg-slate-900 p-6 shadow-xl">
-          <label className="mb-3 block text-sm font-medium text-slate-300">
-            Describe the fault or symptom
-          </label>
+        {/* INTRO */}
+        <section className="mb-6 rounded-2xl border border-slate-800 bg-slate-900 p-6">
 
-          <textarea
-            value={query}
-            onChange={(e) =>
-              setQuery(e.target.value)
-            }
-            placeholder="Example: E17 motor gets hot after 10 minutes"
-            className="min-h-[120px] w-full resize-none rounded-xl border border-slate-700 bg-slate-950 p-4 text-white outline-none transition focus:border-blue-500"
-          />
+          <h2 className="text-xl font-semibold">
+            Diagnose an Industrial Motor Fault
+          </h2>
 
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-400">
+            Enter an industrial motor fault code or symptom to retrieve
+            technical evidence and generate actionable troubleshooting
+            guidance.
+          </p>
+
+          {/* INPUT */}
+          <div className="mt-6">
+
+            <label className="mb-2 block text-sm font-medium text-slate-300">
+              Describe the fault or symptom
+            </label>
+
+            <textarea
+              value={fault}
+              onChange={(event) =>
+                setFault(event.target.value)
+              }
+              placeholder="Example: E17 motor gets hot after 10 minutes"
+              rows={4}
+              className="w-full resize-none rounded-xl border border-slate-700 bg-slate-950 p-4 text-sm outline-none transition focus:border-blue-500"
+            />
+
+          </div>
+
+          {/* QUICK BUTTONS */}
           <div className="mt-4 flex flex-wrap gap-2">
+
             <button
               onClick={() =>
-                handleExample(
-                  "E17 motor gets hot after 10 minutes"
-                )
+                runExample("E17 motor overheating")
               }
-              className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800"
+              className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs transition hover:bg-slate-700"
             >
               E17 overheating
             </button>
 
             <button
               onClick={() =>
-                handleExample(
-                  "E21 motor current is too high"
-                )
+                runExample("E21 motor over-current")
               }
-              className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800"
+              className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs transition hover:bg-slate-700"
             >
               E21 over-current
             </button>
 
             <button
               onClick={() =>
-                handleExample(
-                  "Motor has abnormal vibration and noise"
-                )
+                runExample("Motor abnormal vibration")
               }
-              className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800"
+              className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs transition hover:bg-slate-700"
             >
               Vibration
             </button>
+
           </div>
 
-          <button
-            onClick={searchKnowledge}
-            disabled={loading}
-            className="mt-5 w-full rounded-xl bg-blue-600 px-5 py-3 font-semibold transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {loading
-              ? "Analyzing..."
-              : "Diagnose Fault"}
-          </button>
+          {/* ACTION BUTTONS */}
+          <div className="mt-5 flex flex-col gap-3 sm:flex-row">
 
-          {error && (
-            <p className="mt-3 text-sm text-red-400">
-              {error}
-            </p>
-          )}
+            <button
+              onClick={() => searchKnowledge()}
+              disabled={loading}
+              className="rounded-xl bg-blue-600 px-6 py-3 text-sm font-semibold transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {loading ? "Diagnosing..." : "Diagnose Fault"}
+            </button>
+
+            <button
+              onClick={startVoiceDiagnosis}
+              disabled={isListening || loading}
+              className="rounded-xl border border-blue-500/40 bg-blue-500/10 px-6 py-3 text-sm font-semibold text-blue-300 transition hover:bg-blue-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isListening
+                ? "🎙️ Listening..."
+                : "🎤 Talk to FixFlow"}
+            </button>
+
+          </div>
+
         </section>
 
-        {/* RETRIEVAL STATUS */}
-        <section className="mb-8 grid gap-4 md:grid-cols-3">
+        {/* STATUS CARDS */}
+        <section className="mb-6 grid gap-4 md:grid-cols-3">
 
-          <div className="rounded-xl border border-slate-800 bg-slate-900 p-5">
-            <p className="text-sm text-slate-400">
+          <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
+
+            <p className="text-xs uppercase tracking-wide text-slate-500">
               Knowledge Retrieval
             </p>
 
-            <div className="mt-2 flex items-center gap-2">
-              <span
-                className={`h-2.5 w-2.5 rounded-full ${
-                  retrievalLoading
-                    ? "bg-yellow-400"
-                    : retrievalStatus.includes("Live")
-                    ? "bg-green-400"
-                    : "bg-yellow-400"
-                }`}
-              />
+            <p className="mt-2 text-lg font-semibold">
+              {retrievalStatus}
+            </p>
 
-              <span className="font-semibold">
-                {retrievalStatus}
-              </span>
-            </div>
           </div>
 
-          <div className="rounded-xl border border-slate-800 bg-slate-900 p-5">
-            <p className="text-sm text-slate-400">
+          <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
+
+            <p className="text-xs uppercase tracking-wide text-slate-500">
               Moss Knowledge Index
             </p>
 
-            <p className="mt-2 font-semibold text-blue-400">
+            <p className="mt-2 text-lg font-semibold">
               fixflow-knowledge-v2
             </p>
+
           </div>
 
-          <div className="rounded-xl border border-slate-800 bg-slate-900 p-5">
-            <p className="text-sm text-slate-400">
+          <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
+
+            <p className="text-xs uppercase tracking-wide text-slate-500">
               Retrieval Latency
             </p>
 
-            <p className="mt-2 font-semibold">
+            <p className="mt-2 text-lg font-semibold">
               {retrievalLatency}
             </p>
+
           </div>
+
         </section>
 
         {/* RESULTS */}
-        {diagnosis && (
-          <div className="grid gap-6 lg:grid-cols-2">
+        {diagnosis ? (
+          <section className="grid gap-6 lg:grid-cols-2">
 
             {/* DIAGNOSIS */}
-            <section className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+            <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
 
-              <div className="mb-5 flex items-start justify-between gap-4">
+              <div className="flex items-start justify-between gap-4">
+
                 <div>
-                  <p className="text-sm text-slate-400">
+
+                  <p className="text-xs font-semibold uppercase tracking-wider text-blue-400">
                     AI Diagnosis
                   </p>
 
-                  <h2 className="mt-1 text-2xl font-bold">
+                  <h2 className="mt-2 text-2xl font-bold">
                     {diagnosis.title}
                   </h2>
+
                 </div>
 
-                <span className="rounded-full border border-red-500/40 bg-red-500/10 px-3 py-1 text-xs font-bold text-red-400">
-                  {diagnosis.severity}
-                </span>
-              </div>
+                <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-center">
 
-              <div className="mb-6 rounded-xl border border-slate-800 bg-slate-950 p-4">
-                <div className="mb-2 flex justify-between">
-                  <span className="text-sm text-slate-400">
-                    Confidence
-                  </span>
-
-                  <span className="font-bold">
-                    {diagnosis.confidence}%
-                  </span>
-                </div>
-
-                <div className="h-2 overflow-hidden rounded-full bg-slate-800">
-                  <div
-                    className="h-full rounded-full bg-blue-500"
-                    style={{
-                      width: `${diagnosis.confidence}%`,
-                    }}
-                  />
-                </div>
-              </div>
-
-              <h3 className="mb-3 font-semibold">
-                Likely Causes
-              </h3>
-
-              <ul className="mb-6 space-y-3">
-                {diagnosis.causes.map(
-                  (cause, index) => (
-                    <li
-                      key={index}
-                      className="flex gap-3 text-sm text-slate-300"
-                    >
-                      <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-blue-500" />
-                      {cause}
-                    </li>
-                  )
-                )}
-              </ul>
-
-              <h3 className="mb-3 font-semibold">
-                Recommended Checks
-              </h3>
-
-              <div className="space-y-3">
-                {diagnosis.checks.map(
-                  (check, index) => (
-                    <div
-                      key={index}
-                      className="flex gap-3 rounded-lg border border-slate-800 bg-slate-950 p-3 text-sm text-slate-300"
-                    >
-                      <span className="font-bold text-blue-400">
-                        {index + 1}.
-                      </span>
-
-                      <span>{check}</span>
-                    </div>
-                  )
-                )}
-              </div>
-
-              <div className="mt-6 rounded-xl border border-yellow-500/30 bg-yellow-500/5 p-4">
-                <p className="mb-1 font-semibold text-yellow-400">
-                  Safety Reminder
-                </p>
-
-                <p className="text-sm leading-6 text-slate-300">
-                  {diagnosis.safety}
-                </p>
-              </div>
-            </section>
-
-            {/* EVIDENCE */}
-            <section className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
-
-              <div className="mb-5 flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-slate-400">
-                    Retrieved Evidence
+                  <p className="text-xs text-red-400">
+                    {diagnosis.severity}
                   </p>
 
-                  <h2 className="mt-1 text-2xl font-bold">
-                    Technical Knowledge
-                  </h2>
+                  <p className="mt-1 text-sm font-bold">
+                    {diagnosis.confidence}%
+                  </p>
+
+                  <p className="text-[10px] text-slate-500">
+                    confidence
+                  </p>
+
                 </div>
 
-                <span className="rounded-full bg-blue-500/10 px-3 py-1 text-xs font-semibold text-blue-400">
-                  {evidence.length} documents
-                </span>
               </div>
 
-              {evidence.length === 0 ? (
-                <div className="rounded-xl border border-slate-800 bg-slate-950 p-5 text-sm text-slate-400">
-                  No evidence retrieved.
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {evidence.map(
-                    (item, index) => (
+              {/* LIKELY CAUSES */}
+              <div className="mt-7">
+
+                <h3 className="mb-3 font-semibold">
+                  Likely Causes
+                </h3>
+
+                <div className="space-y-2">
+
+                  {diagnosis.causes.map(
+                    (cause, index) => (
                       <div
-                        key={`${item.id}-${index}`}
-                        className="rounded-xl border border-slate-800 bg-slate-950 p-4"
+                        key={index}
+                        className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-sm text-slate-300"
                       >
-                        <div className="mb-2 flex items-center justify-between">
-                          <span className="font-semibold text-blue-400">
-                            Evidence {index + 1}
-                          </span>
+                        <span className="mr-2 text-blue-400">
+                          {index + 1}.
+                        </span>
 
-                          <span className="text-xs text-slate-500">
-                            Score:{" "}
-                            {typeof item.score ===
-                            "number"
-                              ? item.score.toFixed(2)
-                              : item.score}
-                          </span>
-                        </div>
-
-                        <p className="text-sm leading-6 text-slate-300">
-                          {item.text}
-                        </p>
-
-                        <p className="mt-3 text-xs text-slate-500">
-                          Source ID: {item.id}
-                        </p>
+                        {cause}
                       </div>
                     )
                   )}
-                </div>
-              )}
-            </section>
-          </div>
-        )}
 
-        {/* EMPTY STATE */}
-        {!diagnosis && (
-          <section className="rounded-2xl border border-dashed border-slate-800 bg-slate-900/50 p-10 text-center">
-            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-blue-500/10 text-2xl">
-              ⚙️
+                </div>
+
+              </div>
+
+              {/* GUIDED REPAIR */}
+              <div className="mt-7 rounded-xl border border-blue-500/30 bg-blue-500/5 p-5">
+
+                {!guidedRepair ? (
+                  <>
+
+                    <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+
+                      <div>
+
+                        <p className="text-sm font-semibold text-blue-400">
+                          🛠️ Guided Repair Mode
+                        </p>
+
+                        <p className="mt-1 text-xs leading-5 text-slate-400">
+                          Follow each recommended check step-by-step
+                          and record what the technician observes.
+                        </p>
+
+                      </div>
+
+                      <button
+                        onClick={startGuidedRepair}
+                        className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold transition hover:bg-blue-500"
+                      >
+                        Start Guided Repair
+                      </button>
+
+                    </div>
+
+                  </>
+                ) : (
+                  <>
+
+                    {/* GUIDED HEADER */}
+                    <div className="flex items-center justify-between">
+
+                      <div>
+
+                        <p className="text-sm font-semibold text-blue-400">
+                          🛠️ Guided Repair
+                        </p>
+
+                        <p className="mt-1 text-xs text-slate-500">
+                          Step {guidedStep + 1} of{" "}
+                          {diagnosis.checks.length}
+                        </p>
+
+                      </div>
+
+                      <button
+                        onClick={resetGuidedRepair}
+                        className="text-xs text-slate-500 transition hover:text-white"
+                      >
+                        Exit
+                      </button>
+
+                    </div>
+
+                    {/* PROGRESS */}
+                    <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-800">
+
+                      <div
+                        className="h-full rounded-full bg-blue-500 transition-all duration-300"
+                        style={{
+                          width: `${
+                            ((guidedStep + 1) /
+                              diagnosis.checks.length) *
+                            100
+                          }%`,
+                        }}
+                      />
+
+                    </div>
+
+                    {/* CURRENT STEP */}
+                    <div className="mt-5 rounded-xl border border-slate-700 bg-slate-950 p-5">
+
+                      <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                        Technician Check
+                      </p>
+
+                      <p className="mt-3 text-base font-medium leading-7 text-white">
+                        {diagnosis.checks[guidedStep]}
+                      </p>
+
+                    </div>
+
+                    {/* SAFETY */}
+                    <div className="mt-4 rounded-lg border border-yellow-500/30 bg-yellow-500/5 p-4">
+
+                      <p className="text-sm font-semibold text-yellow-400">
+                        ⚠️ Safety Reminder
+                      </p>
+
+                      <p className="mt-2 text-xs leading-5 text-slate-300">
+                        {diagnosis.safety}
+                      </p>
+
+                    </div>
+
+                    {/* OBSERVATION */}
+                    <div className="mt-5">
+
+                      <p className="text-sm font-semibold text-slate-300">
+                        Record Observation
+                      </p>
+
+                      <p className="mt-1 text-xs text-slate-500">
+                        Select what the technician observed during
+                        this check.
+                      </p>
+
+                      <div className="mt-3 grid grid-cols-2 gap-3">
+
+                        <button
+                          onClick={() =>
+                            recordGuidedAnswer(
+                              "Issue Found"
+                            )
+                          }
+                          className={`rounded-lg border px-3 py-3 text-sm font-semibold transition ${
+                            guidedAnswers.some(
+                              (item) =>
+                                item.step === guidedStep &&
+                                item.result ===
+                                  "Issue Found"
+                            )
+                              ? "border-red-400 bg-red-500/20 text-red-300"
+                              : "border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500/20"
+                          }`}
+                        >
+                          ⚠️ Issue Found
+                        </button>
+
+                        <button
+                          onClick={() =>
+                            recordGuidedAnswer(
+                              "No Issue"
+                            )
+                          }
+                          className={`rounded-lg border px-3 py-3 text-sm font-semibold transition ${
+                            guidedAnswers.some(
+                              (item) =>
+                                item.step === guidedStep &&
+                                item.result ===
+                                  "No Issue"
+                            )
+                              ? "border-green-400 bg-green-500/20 text-green-300"
+                              : "border-green-500/30 bg-green-500/10 text-green-400 hover:bg-green-500/20"
+                          }`}
+                        >
+                          ✓ No Issue
+                        </button>
+
+                      </div>
+
+                    </div>
+
+                    {/* NEXT */}
+                    <button
+                      onClick={nextGuidedStep}
+                      className="mt-4 w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-semibold transition hover:bg-blue-500"
+                    >
+                      {guidedStep ===
+                      diagnosis.checks.length - 1
+                        ? "✓ Complete Troubleshooting"
+                        : "Next Step →"}
+                    </button>
+
+                  </>
+                )}
+
+              </div>
+
+              {/* RECOMMENDED CHECKS */}
+              <div className="mt-7">
+
+                <h3 className="mb-3 font-semibold">
+                  Recommended Checks
+                </h3>
+
+                <div className="space-y-2">
+
+                  {diagnosis.checks.map(
+                    (check, index) => (
+                      <div
+                        key={index}
+                        className="flex gap-3 rounded-lg border border-slate-800 bg-slate-950 p-3 text-sm text-slate-300"
+                      >
+
+                        <span className="font-semibold text-blue-400">
+                          {index + 1}.
+                        </span>
+
+                        <span>{check}</span>
+
+                      </div>
+                    )
+                  )}
+
+                </div>
+
+              </div>
+
+              {/* SAFETY REMINDER */}
+              <div className="mt-6 rounded-xl border border-yellow-500/30 bg-yellow-500/5 p-4">
+
+                <p className="text-sm font-semibold text-yellow-400">
+                  ⚠️ Safety Reminder
+                </p>
+
+                <p className="mt-2 text-sm leading-6 text-slate-300">
+                  {diagnosis.safety}
+                </p>
+
+              </div>
+
             </div>
 
-            <h2 className="text-xl font-semibold">
-              Ready to troubleshoot
+            {/* EVIDENCE */}
+            <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+
+              <div className="flex items-center justify-between">
+
+                <div>
+
+                  <p className="text-xs font-semibold uppercase tracking-wider text-blue-400">
+                    Retrieved Evidence
+                  </p>
+
+                  <h2 className="mt-2 text-xl font-bold">
+                    Technical Knowledge
+                  </h2>
+
+                </div>
+
+                <div className="rounded-lg bg-slate-800 px-3 py-2 text-xs text-slate-400">
+                  {evidence.length} documents
+                </div>
+
+              </div>
+
+              {/* EVIDENCE LIST */}
+              <div className="mt-6 space-y-4">
+
+                {evidence.length > 0 ? (
+                  evidence.map((item, index) => (
+                    <div
+                      key={item.id || index}
+                      className="rounded-xl border border-slate-800 bg-slate-950 p-4"
+                    >
+
+                      <div className="flex items-center justify-between gap-3">
+
+                        <p className="text-xs font-semibold text-blue-400">
+                          Evidence {index + 1}
+                        </p>
+
+                        {typeof item.score === "number" && (
+                          <span className="rounded bg-slate-800 px-2 py-1 text-[10px] text-slate-400">
+                            Score{" "}
+                            {item.score.toFixed(2)}
+                          </span>
+                        )}
+
+                      </div>
+
+                      {item.source && (
+                        <p className="mt-2 text-[10px] text-slate-500">
+                          Source: {item.source}
+                        </p>
+                      )}
+
+                      {item.id && (
+                        <p className="mt-1 text-[10px] text-slate-500">
+                          ID: {item.id}
+                        </p>
+                      )}
+
+                      {/* ACTUAL MOSS EVIDENCE TEXT */}
+                      <p className="mt-3 text-sm leading-6 text-slate-300">
+                        {item.text ||
+                          item.content ||
+                          "Relevant technical evidence retrieved from the knowledge base."}
+                      </p>
+
+                    </div>
+                  ))
+                ) : (
+                  <div className="rounded-xl border border-slate-800 bg-slate-950 p-5 text-sm text-slate-500">
+                    No retrieval evidence available.
+                  </div>
+                )}
+
+              </div>
+
+              {/* EVIDENCE GROUNDING */}
+              <div className="mt-6 rounded-xl border border-blue-500/20 bg-blue-500/5 p-4">
+
+                <p className="text-sm font-semibold text-blue-400">
+                  🔎 Evidence-Grounded Diagnosis
+                </p>
+
+                <p className="mt-2 text-xs leading-5 text-slate-400">
+                  FixFlow retrieves relevant technical knowledge
+                  from the Moss knowledge index and uses the
+                  retrieved evidence within the troubleshooting
+                  workflow. Evidence IDs and relevance scores
+                  provide traceability for the diagnostic result.
+                </p>
+
+              </div>
+
+            </div>
+
+          </section>
+        ) : (
+          /* EMPTY STATE */
+          <section className="rounded-2xl border border-dashed border-slate-800 bg-slate-900/50 p-12 text-center">
+
+            <div className="text-5xl">
+              🔧
+            </div>
+
+            <h2 className="mt-4 text-xl font-semibold">
+              Ready for Diagnosis
             </h2>
 
-            <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-400">
-              Enter a motor fault code or symptom above.
-              FixFlow will retrieve relevant technical
-              knowledge and generate a structured diagnosis.
+            <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-500">
+              Enter a motor fault code or symptom above. FixFlow
+              will retrieve relevant technical evidence and
+              generate a structured troubleshooting workflow.
             </p>
+
           </section>
         )}
 
         {/* FOOTER */}
-        <footer className="mt-10 border-t border-slate-800 pt-6 text-center text-xs text-slate-500">
-          FixFlow • AI Technician Troubleshooting Assistant •
-          Knowledge Index: fixflow-knowledge-v2
+        <footer className="mt-10 border-t border-slate-800 pt-6 text-center text-xs text-slate-600">
+          FixFlow • Moss-powered AI troubleshooting assistant
         </footer>
+
       </div>
     </main>
   );
