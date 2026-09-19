@@ -72,3 +72,14 @@ The system retrieves relevant technical knowledge and presents it together with 
 ## ?? Live Demo
 
 [?? FixFlow – Live Demo](https://fixflow-moss-dpcvo2iv6-sree-7b83.vercel.app/)
+
+
+---
+
+## ?? Live Demo
+
+https://fixflow-moss-dpcvo2iv6-sree-7b83.vercel.app/
+
+## ?? GitHub Repository
+
+https://github.com/csreedharani90-boop/fixflow-ai
